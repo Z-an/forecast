@@ -111,6 +111,68 @@ LEFT JOIN coupon_coupon  AS coupon_coupon ON accountcoupon_couponusehistory.coup
 GROUP BY TO_DATE(CONVERT_TIMEZONE('UTC', 'Australia/Sydney', CAST(accountcoupon_couponusehistory.time  AS TIMESTAMP_NTZ)))
 ORDER BY 1 DESC"""
 
+__USER_FINANCIALS = """
+WITH user_facts AS (SELECT 
+	users.id  AS user_id,
+	TO_DATE(users.date_joined ) AS joined,
+	COUNT(DISTINCT merchant_merchant.id ) AS count_of_merchants,
+	COUNT(DISTINCT accountcoupon_couponusehistory.id ) AS transaction_count,
+	COALESCE(COALESCE(CAST( ( SUM(DISTINCT (CAST(FLOOR(COALESCE(accountcoupon_couponusehistory.bill_amount ,0)*(1000000*1.0)) AS DECIMAL(38,0))) + (MD5_NUMBER(accountcoupon_couponusehistory.id ) % 1.0e27)::NUMERIC(38,0) ) - SUM(DISTINCT (MD5_NUMBER(accountcoupon_couponusehistory.id ) % 1.0e27)::NUMERIC(38,0)) )  AS DOUBLE PRECISION) / CAST((1000000*1.0) AS DOUBLE PRECISION), 0), 0) AS ltv,
+	COALESCE(COALESCE(CAST( ( SUM(DISTINCT (CAST(FLOOR(COALESCE((case
+          when accountcoupon_couponusehistory.special_promo_credit_id is not null then (
+            case when promo_codes.credit  - accountcoupon_couponusehistory.bill_amount <= 0 then promo_codes.credit else promo_codes.credit - (promo_codes.credit - accountcoupon_couponusehistory.bill_amount) end
+            )
+          else 0 end) ,0)*(1000000*1.0)) AS DECIMAL(38,0))) + (MD5_NUMBER(accountcoupon_couponusehistory.id ) % 1.0e27)::NUMERIC(38,0) ) - SUM(DISTINCT (MD5_NUMBER(accountcoupon_couponusehistory.id ) % 1.0e27)::NUMERIC(38,0)) )  AS DOUBLE PRECISION) / CAST((1000000*1.0) AS DOUBLE PRECISION), 0), 0) AS total_promo_volume,
+	COUNT(account_referralcredit.id ) AS referral_count
+FROM account_localuser  AS users
+FULL OUTER JOIN accountcoupon_couponusehistory  AS accountcoupon_couponusehistory ON users.id = accountcoupon_couponusehistory.user_id 
+LEFT JOIN branch_branch  AS branch_branch ON accountcoupon_couponusehistory.branch_id = branch_branch.id 
+LEFT JOIN merchant_merchant  AS merchant_merchant ON merchant_merchant.id = branch_branch.merchant_id 
+LEFT JOIN account_referralcredit  AS account_referralcredit ON accountcoupon_couponusehistory.referral_credit_id = account_referralcredit.id 
+LEFT JOIN membershipvoucher_membershipvoucher  AS promo_codes ON accountcoupon_couponusehistory.special_promo_credit_id = promo_codes.id 
+
+GROUP BY 1,TO_DATE(users.date_joined ))
+SELECT 
+	TO_CHAR(TO_DATE(CONVERT_TIMEZONE('UTC', 'Australia/Sydney', CAST(accountcoupon_couponusehistory.time  AS TIMESTAMP_NTZ))), 'YYYY-MM-DD') AS "accountcoupon_couponusehistory.time_date",
+	merchant_merchant.name  AS "merchant_merchant.name",
+	coupon_coupon.percent_off  AS "accountcoupon_couponusehistory.reward_rate",
+	users.id  AS "users.id",
+	user_facts.ltv - user_facts.total_promo_volume  AS "user_facts.total_organic_volume",
+	user_facts.total_promo_volume AS "user_facts.total_promo_volume",
+	user_facts.transaction_count AS "user_facts.transaction_count",
+	DATEDIFF("day", (TO_CHAR(TO_DATE(CONVERT_TIMEZONE('UTC', 'Australia/Sydney', CAST(users.date_joined  AS TIMESTAMP_NTZ))), 'YYYY-MM-DD')), current_date())  AS "users.days_since_user_signup",
+	case when merchant_merchant.membership_zone_id = 1 then 'Melbourne'
+          when merchant_merchant.membership_zone_id = 2 then 'Sydney'
+          else null end AS "merchant_merchant.city",
+	COALESCE(COALESCE(CAST( ( SUM(DISTINCT (CAST(FLOOR(COALESCE((GREATEST(accountcoupon_couponusehistory.bill_amount-(case when accountcoupon_couponusehistory.referral_credit_id is not null then (
+      case when account_referralcredit.referred_credit  - accountcoupon_couponusehistory.bill_amount <= 0 then account_referralcredit.referred_credit else account_referralcredit.referred_credit - (account_referralcredit.referred_credit - accountcoupon_couponusehistory.bill_amount) end
+      )
+    else 0 end)-(case
+          when accountcoupon_couponusehistory.special_promo_credit_id is not null then (
+            case when promo_codes.credit  - accountcoupon_couponusehistory.bill_amount <= 0 then promo_codes.credit else promo_codes.credit - (promo_codes.credit - accountcoupon_couponusehistory.bill_amount) end
+            )
+          else 0 end)-(case when (coupon_coupon.name LIKE '%Frenzy%') then (LEAST(coupon_coupon.amount_limit, coupon_coupon.percent_off/100 * accountcoupon_couponusehistory.bill_amount)) - (case
+      when
+        DATEDIFF(DAY,  (TO_CHAR(TO_DATE(CONVERT_TIMEZONE('UTC', 'Australia/Sydney', CAST(accountcoupon_couponusehistory.time  AS TIMESTAMP_NTZ))), 'YYYY-MM-DD')), (TO_CHAR(TO_DATE(CONVERT_TIMEZONE('UTC', 'Australia/Sydney', CAST(branch_branch."ZERO_COMMISSION_UNTIL"  AS TIMESTAMP_NTZ))), 'YYYY-MM-DD'))) > 0 then 0
+      when
+        coupon_coupon.commission_percent = 0 then 0
+        else coupon_coupon.commission_percent/100 * accountcoupon_couponusehistory.bill_amount
+    end) else 0 end), 0)) ,0)*(1000000*1.0)) AS DECIMAL(38,0))) + (MD5_NUMBER(accountcoupon_couponusehistory.id ) % 1.0e27)::NUMERIC(38,0) ) - SUM(DISTINCT (MD5_NUMBER(accountcoupon_couponusehistory.id ) % 1.0e27)::NUMERIC(38,0)) )  AS DOUBLE PRECISION) / CAST((1000000*1.0) AS DOUBLE PRECISION), 0), 0) AS "accountcoupon_couponusehistory.sum_of_organic_volume",
+	(COALESCE(CAST( ( SUM(DISTINCT (CAST(FLOOR(COALESCE(accountcoupon_couponusehistory.bill_amount ,0)*(1000000*1.0)) AS DECIMAL(38,0))) + (MD5_NUMBER(accountcoupon_couponusehistory.id ) % 1.0e27)::NUMERIC(38,0) ) - SUM(DISTINCT (MD5_NUMBER(accountcoupon_couponusehistory.id ) % 1.0e27)::NUMERIC(38,0)) )  AS DOUBLE PRECISION) / CAST((1000000*1.0) AS DOUBLE PRECISION), 0) / NULLIF(COUNT(DISTINCT CASE WHEN  accountcoupon_couponusehistory.bill_amount  IS NOT NULL THEN accountcoupon_couponusehistory.id  ELSE NULL END), 0)) AS "accountcoupon_couponusehistory.aov",
+	COALESCE(COALESCE(CAST( ( SUM(DISTINCT (CAST(FLOOR(COALESCE(accountcoupon_couponusehistory.bill_amount ,0)*(1000000*1.0)) AS DECIMAL(38,0))) + (MD5_NUMBER(accountcoupon_couponusehistory.id ) % 1.0e27)::NUMERIC(38,0) ) - SUM(DISTINCT (MD5_NUMBER(accountcoupon_couponusehistory.id ) % 1.0e27)::NUMERIC(38,0)) )  AS DOUBLE PRECISION) / CAST((1000000*1.0) AS DOUBLE PRECISION), 0), 0) AS "accountcoupon_couponusehistory.total_transaction_volume"
+FROM account_localuser  AS users
+FULL OUTER JOIN accountcoupon_couponusehistory  AS accountcoupon_couponusehistory ON users.id = accountcoupon_couponusehistory.user_id 
+LEFT JOIN branch_branch  AS branch_branch ON accountcoupon_couponusehistory.branch_id = branch_branch.id 
+LEFT JOIN merchant_merchant  AS merchant_merchant ON merchant_merchant.id = branch_branch.merchant_id 
+LEFT JOIN user_facts ON users.id = user_facts.user_id  
+LEFT JOIN account_referralcredit  AS account_referralcredit ON accountcoupon_couponusehistory.referral_credit_id = account_referralcredit.id 
+LEFT JOIN membershipvoucher_membershipvoucher  AS promo_codes ON accountcoupon_couponusehistory.special_promo_credit_id = promo_codes.id 
+LEFT JOIN coupon_coupon  AS coupon_coupon ON accountcoupon_couponusehistory.coupon_id = coupon_coupon.id 
+
+WHERE 
+	(accountcoupon_couponusehistory.time  IS NOT NULL)
+GROUP BY TO_DATE(CONVERT_TIMEZONE('UTC', 'Australia/Sydney', CAST(accountcoupon_couponusehistory.time  AS TIMESTAMP_NTZ))),2,3,4,5,6,7,8,9"""
+
 import sys
 
 def get_query(kind=None):
@@ -120,7 +182,7 @@ def get_query(kind=None):
 	elif kind=='interactions':
 		return __INTERACTIONS
 
-	elif kind=='coordinates':
+	elif kind=='coordinates':	
 		return __COORDINATES
 	
 	elif kind=='emails':
@@ -128,6 +190,9 @@ def get_query(kind=None):
 	
 	elif kind=='user_cities':
 		return __USER_CITIES
+	
+	elif kind=='user_financials':
+		return __USER_FINANCIALS
 
 	else:
 		assert ValueError

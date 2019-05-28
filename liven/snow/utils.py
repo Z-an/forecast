@@ -55,7 +55,18 @@ def __list_to_df(data,q_kind):
     elif q_kind=='emails':
       df = pd.DataFrame(data,columns=['id','email'])
       return df
+    
+    elif q_kind=='financials':
+      df = pd.DataFrame(data
+            ,columns=['ds','Gross revenue','Org. volume'
+                      ,'Total volume','Org. count','Total count'])
   
+    elif q_kind=='user_financials':
+      df = pd.DataFrame(data
+            ,columns=['ds','merchant','rate','uid','lifetime_transaction_count'
+                      ,'lifetime_organic_volume','lifetime_promo_volume'
+                      ,'sign_up_delta','city','transaction_org_volume','lifetime_aov'
+                      ,'transaction_total_volume'])
     else:
       True==False
 
